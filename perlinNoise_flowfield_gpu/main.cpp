@@ -308,7 +308,13 @@ int main() {
 
         // Cierre de ventana
         //sf::Event event;
+        /*
         while (const std::optional event = window.pollEvent()) {
+            if (event->is<sf::Event::Closed>()) window.close();
+        }
+        */
+        std::optional<sf::Event> event;
+        while (event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) window.close();
         }
 
@@ -319,7 +325,7 @@ int main() {
 
         //______________Generación en GPU______________
         //1. Llamamos a la función que prepara y lanza el kernel
-        launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, flowfield.data(), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
+        launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
 
         //2. Aumentamos el tiempo manualmente:
         zoff += 0.001f; 

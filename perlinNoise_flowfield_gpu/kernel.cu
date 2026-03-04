@@ -67,7 +67,7 @@ __device__ float baseNoise(const int* p, float x, float y, float z) {
 }
 
 // --- KERNEL ---
-__global__ void flowfield_kernel(const int* d_p, const float* d_xoff, const float* d_yoff, const float zoff, float2* d_out, int cols, int rows) {
+__global__ void flowfield_kernel(const int* d_p, const float* d_xoff, const float* d_yoff, const float zoff, float2_simple* d_out, int cols, int rows) {
     // Calculamos el ID del hilo global en 2D
     size_t x_idx = blockIdx.x * blockDim.x + threadIdx.x;
     size_t y_idx = blockIdx.y * blockDim.y + threadIdx.y;
@@ -108,17 +108,17 @@ __global__ void flowfield_kernel(const int* d_p, const float* d_xoff, const floa
 }
 
 // --- FUNCIÓN DE LANZAMIENTO ---
-void launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, sf::Vector2f* h_out, int cols, int rows) {
+void launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows) {
 
     // 1. Tamaños y Bytes
     const size_t TOTAL_CELLS = (size_t)cols * rows; //búmero total de celdas
-    const size_t FLOW_BYTES = TOTAL_CELLS * sizeof(float2); //cada celda guarda un vector de 2 floats, por lo que el total de bytes guardados será de 2 * sizeof(float) * núm. de celdas total
+    const size_t FLOW_BYTES = TOTAL_CELLS * sizeof(float2_simple); //cada celda guarda un vector de 2 floats, por lo que el total de bytes guardados será de 2 * sizeof(float) * núm. de celdas total
     const size_t PERM_BYTES = 512 * sizeof(int); //la tabla de permutación de Perlin tiene 512 elementos de tipo int, por lo que ocupará 512 * sozepf(int)
     const size_t XOFF_BYTES = cols * sizeof(float); //cada columna tienen un offset X de tipo float que ocupará el número de columnas * sizeof(float)
     const size_t YOFF_BYTES = rows * sizeof(float); //cada fila tiene un offset Y de tipo float que ocupará el número de filas * sizeof(float)
 
     // 2. Declaramos los punteros de memoria en la GPU (Device)
-    float2* d_out = NULL; //Declaración de puntero para array flowfield de salida
+    float2_simple* d_out = NULL; //Declaración de puntero para array flowfield de salida
     int* d_p = NULL; //Declaración de puntero para array de tabla de permutación de Perlin
     float* d_xoff = NULL; //Declaración de puntero para array de offset en x (columnas)
     float* d_yoff = NULL; //Declaración de puntero para array de offset en y (filas)
