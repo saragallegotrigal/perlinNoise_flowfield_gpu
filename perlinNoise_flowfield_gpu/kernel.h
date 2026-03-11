@@ -1,6 +1,6 @@
 #pragma once
-//#include <SFML/System/Vector2.hpp> // Para que reconozca sf::Vector2f
 
+//Estructura sustitutoria para sf::Vector2f
 struct float2_simple {
     float x;
     float y;

@@ -271,12 +271,16 @@ int main() {
     Perlin3D perlin(1337); //semilla para perlin noise
     float zoff = 0.f; // tiempo -> si se cambia, el campo se mueve; si no -> el flowfield queda fijo
 
-    //para medir tiempo:
-    const int MAX_FRAMES = 1000; //número máximo de iteraciones (frames)
+    // Variables para el protocolo de pruebas (warm-up)
+    const int WARMUP_FRAMES = 100; //100 frames de calentamiento (se descartan)
+    const int TOTAL_TEST_FRAMES = 1000; //frames que sí se miden
     int frameCount = 0; //contador de iteraciones (frames)
+    bool warmedUp = false; //bool para indicar si ya se han renderizado los frames de calentamiento
 
+    //para medir tiempo:
     using clock = std::chrono::high_resolution_clock; //declaración del reloj
     auto startTime = clock::now(); //inicio tiempo
+    auto endTime = clock::now();
 
     // Variables para función con GPU
     std::vector<float> xoff_matrix(cols);
@@ -307,16 +311,18 @@ int main() {
 
 
         // Cierre de ventana
-        //sf::Event event;
-        /*
-        while (const std::optional event = window.pollEvent()) {
-            if (event->is<sf::Event::Closed>()) window.close();
-        }
-        */
         std::optional<sf::Event> event;
         while (event = window.pollEvent()) {
             if (event->is<sf::Event::Closed>()) window.close();
         }
+
+        // Lógica de WARM-UP
+        if (!warmedUp && frameCount == WARMUP_FRAMES) {
+            std::cout << "Fase de Warm-up terminada. Iniciando medición real..." << std::endl;
+            warmedUp = true;
+            startTime = clock::now(); // <--- SE REINICIA EL RELOJ AQUÍ
+        }
+
 
         // --------- GENERACIÓN DEL FLOWFIELD ---------
 
@@ -378,24 +384,29 @@ int main() {
         //contador de tiempo
         frameCount++; //se aumenta en uno el contador de iteraciones (frames)
 
-        /*
-        //Si se ha llegado al número máximo de iteraciones, se cierra la ventana
-        if (frameCount >= MAX_FRAMES) {
-            window.close();
+        // Si ya calentamos y además pasaron los 1000 frames de prueba:
+        if (warmedUp && (frameCount >= WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
+            endTime = clock::now();
+            window.close(); // Cerramos automáticamente para la siguiente repetición
         }
-        */
     }
 
-    auto endTime = clock::now(); //tiempo final
-    std::chrono::duration<double> elapsed = endTime - startTime; //tiempo transcurrido
+    std::chrono::duration<double> elapsed = endTime - startTime;
+    double totalSeconds = elapsed.count();
+    double msPerFrame = (totalSeconds * 1000.0) / TOTAL_TEST_FRAMES;
 
-    //Impresión por pantalla datos
-    std::cout << "Particles: " << N << "\n";
-    std::cout << "Flowfield: " << cols << " x " << rows << "\n";
-    std::cout << "Frames: " << frameCount << "\n";
-    std::cout << "Total time (s): " << elapsed.count() << "\n";
-    std::cout << "Time per frame (ms): " << (elapsed.count() * 1000.0 / frameCount) << "\n\n";
-
+    // --- Informe Final en Consola ---
+    std::cout << "--------------------------------------" << std::endl;
+    std::cout << "DATOS DE LA EJECUCION:" << std::endl;
+    std::cout << "Numero de particulas: " << N << "\n";
+    std::cout << "Dimensiones Flowfield: " << cols << " x " << rows << "\n";
+    std::cout << std::endl;
+    std::cout << "RESULTADOS DE LA REPETICION:" << std::endl;
+    std::cout << "Frames medidos: " << TOTAL_TEST_FRAMES << " (tras " << WARMUP_FRAMES << " de warm-up)" << std::endl;
+    std::cout << "Tiempo total: " << totalSeconds << " s" << std::endl;
+    std::cout << "Media (ms/frame): " << msPerFrame << " ms" << std::endl;
+    std::cout << "FPS medios: " << TOTAL_TEST_FRAMES / totalSeconds << std::endl;
+    std::cout << "--------------------------------------" << std::endl;
 
     return 0; //fin del programa
 }
