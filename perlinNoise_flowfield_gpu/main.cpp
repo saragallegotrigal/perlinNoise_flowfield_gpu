@@ -191,6 +191,7 @@ struct Particle {
 // ------------------------ Función flowfield en CPU------------------------
 void flowfield_cpu(Perlin3D& perlin, const float inc, const int cols, const int rows, std::vector<sf::Vector2f>& flowfield, float& zoff) {
     // --- Generación del Flow Field ---
+    //std::cout << "EJECUCION EN CPU" << std::endl;
     float yoff = 0.f; //coordenada y en el ruido perlin
 
     //Recorremos la rejilla FILA A FILA
@@ -256,7 +257,7 @@ int main() {
     // que guarda la dirección que seguirán las partículas
     std::vector<sf::Vector2f> flowfield(flowCount);
 
-    const int N = 5000; //número de partículas: 100, 1000, 5000, 10000, 20000, 50000
+    const int N = 5000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
     std::mt19937 rng(42); //generador de números aleatorios con semilla fija = 42
     std::uniform_real_distribution<float> rx(0.f, (float)WIDTH); //posición x aleatoria
     std::uniform_real_distribution<float> ry(0.f, (float)HEIGHT); //posición y aleatoria
@@ -277,11 +278,6 @@ int main() {
     int frameCount = 0; //contador de iteraciones (frames)
     bool warmedUp = false; //bool para indicar si ya se han renderizado los frames de calentamiento
 
-    //para medir tiempo:
-    using clock = std::chrono::high_resolution_clock; //declaración del reloj
-    auto startTime = clock::now(); //inicio tiempo
-    auto endTime = clock::now();
-
     // Variables para función con GPU
     std::vector<float> xoff_matrix(cols);
     std::vector<float> yoff_matrix(rows);
@@ -289,6 +285,59 @@ int main() {
     for (int i = 0; i < cols; ++i) xoff_matrix[i] = i * inc;
     for (int j = 0; j < rows; ++j) yoff_matrix[j] = j * inc;
 
+    // ============================================================================
+    // APARTADO 2.2: VALIDACIÓN NUMÉRICA (CPU vs GPU)
+    // ============================================================================
+    /*
+    std::cout << "Iniciando comparativa numerica..." << std::endl;
+
+    // 1. Creamos un vector temporal para guardar el resultado de la CPU
+    std::vector<sf::Vector2f> flowfield_cpu_test(flowCount);
+    float zoff_test = 0.0f; // Usamos tiempo cero para ambos
+
+    // 2. Calculamos el campo con la CPU
+    flowfield_cpu(perlin, inc, cols, rows, flowfield_cpu_test, zoff_test);
+
+    // 3. Calculamos el campo con la GPU (el resultado quedará en tu vector 'flowfield')
+    zoff_test = 0.0f; // Reseteamos el tiempo para que sea identico
+    launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff_test, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows);
+
+    // 4. Cálculo de métricas: Diferencia Media y RMSE
+    double sumErrorSq = 0;
+    double sumDiff = 0;
+    float maxDiff = 0;
+
+    for (size_t i = 0; i < flowCount; i++) {
+        // Calculamos la distancia euclídea entre el vector CPU y el GPU
+        float dx = flowfield_cpu_test[i].x - flowfield[i].x;
+        float dy = flowfield_cpu_test[i].y - flowfield[i].y;
+        float diff = std::sqrt(dx * dx + dy * dy);
+
+        sumDiff += diff;
+        sumErrorSq += (diff * diff);
+        if (diff > maxDiff) maxDiff = diff;
+    }
+
+    double meanDiff = sumDiff / flowCount;
+    double rmse = std::sqrt(sumErrorSq / flowCount);
+
+    std::cout << "--- ERROR NUMERICO ---" << std::endl;
+    std::cout << "Diferencia media: " << meanDiff << std::endl;
+    std::cout << "RMSE: " << rmse << std::endl;
+    std::cout << "Diferencia Max: " << maxDiff << std::endl;
+    std::cout << "-------------------------------" << std::endl << std::endl;
+    */
+    // ============================================================================
+
+    //para medir tiempo:
+    using clockFPS = std::chrono::high_resolution_clock; //declaración del reloj
+    auto startTime = clockFPS::now(); //inicio tiempo
+    auto endTime = clockFPS::now();
+    double acumuladoCPU = 0.0; // Para sumar los tiempos de cada frame en CPU
+    double acumuladoGPU = 0.0; // Para sumar los tiempos de cada frame en GPU
+
+    //CPU o GPU
+    bool cpu = false;
 
     // loop principal -> mientras la ventana esté activa (abierta)
     while (window.isOpen()) {
@@ -318,20 +367,44 @@ int main() {
 
         // Lógica de WARM-UP
         if (!warmedUp && frameCount == WARMUP_FRAMES) {
-            std::cout << "Fase de Warm-up terminada. Iniciando medición real..." << std::endl;
+            std::cout << "Fase de Warm-up terminada. Iniciando medicion real..." << std::endl;
+            std::cout << std::endl;
             warmedUp = true;
-            startTime = clock::now(); // <--- SE REINICIA EL RELOJ AQUÍ
+            startTime = clockFPS::now(); // <--- SE REINICIA EL RELOJ AQUÍ
         }
 
 
         // --------- GENERACIÓN DEL FLOWFIELD ---------
 
         //______________Generación en CPU______________
-        //flowfield_cpu(perlin, inc, cols, rows, flowfield, zoff);
+       
+        /*
+        auto cpu_start = std::chrono::high_resolution_clock::now(); //Inicio
+
+        //1. Llamamos a la función que prepara y lanza el kernel
+        flowfield_cpu(perlin, inc, cols, rows, flowfield, zoff);
+        cpu = true;
+
+        auto cpu_end = std::chrono::high_resolution_clock::now(); //Fin
+
+        // Solo acumulamos si estamos en la fase de medición (tras el warm-up)
+        if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
+            std::chrono::duration<double, std::milli> frameMS = cpu_end - cpu_start;
+            acumuladoCPU += frameMS.count();
+        }
+        */
 
         //______________Generación en GPU______________
+        
+        // /*
         //1. Llamamos a la función que prepara y lanza el kernel
-        launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
+        float timeGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
+
+        // Solo acumulamos si estamos en la fase de medición (tras el warm-up)
+        if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
+            acumuladoGPU += timeGPU;
+        }
+        // */
 
         //2. Aumentamos el tiempo manualmente:
         zoff += 0.001f; 
@@ -386,7 +459,7 @@ int main() {
 
         // Si ya calentamos y además pasaron los 1000 frames de prueba:
         if (warmedUp && (frameCount >= WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
-            endTime = clock::now();
+            endTime = clockFPS::now();
             window.close(); // Cerramos automáticamente para la siguiente repetición
         }
     }
@@ -394,6 +467,8 @@ int main() {
     std::chrono::duration<double> elapsed = endTime - startTime;
     double totalSeconds = elapsed.count();
     double msPerFrame = (totalSeconds * 1000.0) / TOTAL_TEST_FRAMES;
+    double mediaCPUms = (acumuladoCPU * 1000.0) / TOTAL_TEST_FRAMES;
+    double mediaGPUms = (acumuladoGPU * 1000.0) / TOTAL_TEST_FRAMES;
 
     // --- Informe Final en Consola ---
     std::cout << "--------------------------------------" << std::endl;
@@ -405,7 +480,14 @@ int main() {
     std::cout << "Frames medidos: " << TOTAL_TEST_FRAMES << " (tras " << WARMUP_FRAMES << " de warm-up)" << std::endl;
     std::cout << "Tiempo total: " << totalSeconds << " s" << std::endl;
     std::cout << "Media (ms/frame): " << msPerFrame << " ms" << std::endl;
-    std::cout << "FPS medios: " << TOTAL_TEST_FRAMES / totalSeconds << std::endl;
+    std::cout << "FPS medios: " << TOTAL_TEST_FRAMES / totalSeconds << " FPS" << std::endl;
+
+    if (cpu) { //Si se genera el flowfield en cpu:
+        std::cout << "Tiempo de generacion flowfield en CPU: " << mediaCPUms << " ms" << std::endl;
+    }
+    else { //Si se genera en GPU
+        std::cout << "Tiempo de generacion flowfield en GPU: " << mediaGPUms << " ms" << std::endl;
+    }
     std::cout << "--------------------------------------" << std::endl;
 
     return 0; //fin del programa

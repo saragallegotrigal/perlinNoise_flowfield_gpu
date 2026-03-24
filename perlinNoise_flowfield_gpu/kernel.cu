@@ -1,8 +1,11 @@
 ﻿#include "kernel.h"
+#include "GPUTimer.h"
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+
 #include <cstdio>
 #include <cmath>
+#include <iostream>
 
 // --- FUNCIONES AUXILIARES (__device__) ---
 //Función que hace que la mezcla ocurra suave al principio y al final
@@ -108,7 +111,9 @@ __global__ void flowfield_kernel(const int* d_p, const float* d_xoff, const floa
 }
 
 // --- FUNCIÓN DE LANZAMIENTO ---
-void launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows) {
+float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows) {
+
+    //std::cout << "EJECUCION EN GPU" << std::endl;
 
     // 1. Tamaños y Bytes
     const size_t TOTAL_CELLS = (size_t)cols * rows; //búmero total de celdas
@@ -141,7 +146,17 @@ void launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_y
         (size_t)ceil((float)rows / THREADS_PER_BLOCK.y) //ceil(número total de filas / números de hilos en y)
     );
 
+    // 5.1 Declaramos las variables necesarias para medir el tiempo de ejecución en GPU y lanzamos el kernel
+    GpuTimer timer;
+    
+    //Inicio del temporizador
+    timer.Start();
+
     flowfield_kernel << <BLOCKS_PER_GRID, THREADS_PER_BLOCK >> > (d_p, d_xoff, d_yoff, zoff, d_out, cols, rows); //lanzamiento del kernel
+
+    //Fin del temporizador
+    timer.Stop();
+    float elapsed = timer.Elapsed();
 
     // 6. Copiamos el array de resultados desde la GPU al host
     cudaMemcpy(h_out, d_out, FLOW_BYTES, cudaMemcpyDeviceToHost);
@@ -155,4 +170,6 @@ void launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_y
     d_out = NULL;
     d_p = NULL;
     d_xoff = d_yoff = NULL; //se pueden igualar ambos a NULL a la vez porque son del mismo tipo
+
+    return elapsed;
 }
