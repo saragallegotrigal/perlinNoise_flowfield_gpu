@@ -329,12 +329,13 @@ int main() {
     */
     // ============================================================================
 
-    //para medir tiempo:
+    //Variables para medir tiempos:
     using clockFPS = std::chrono::high_resolution_clock; //declaración del reloj
     auto startTime = clockFPS::now(); //inicio tiempo
     auto endTime = clockFPS::now();
     double acumuladoCPU = 0.0; // Para sumar los tiempos de cada frame en CPU
     double acumuladoGPU = 0.0; // Para sumar los tiempos de cada frame en GPU
+    double acumuladoUpdateParticulas = 0.0; // Para sumar solo la lógica de movimiento
 
     //CPU o GPU
     bool cpu = false;
@@ -409,7 +410,7 @@ int main() {
         //2. Aumentamos el tiempo manualmente:
         zoff += 0.001f; 
 
-        // ------------- RENDERIZADO -------------
+        // ------------- ACTUALIZACIÓN DE PARTÍCULAS Y RENDERIZADO -------------
         // Dibujar estela, haciendo desaparecer lo antiguo poco a poco
         window.draw(fadeRect);
 
@@ -418,6 +419,10 @@ int main() {
         // Reservamos memoria para evitar realocaciones constantes (optimización)
         lines.resize(particles.size() * 2); //cada partícula necesita 2 vértices: punto anterior y punto actual
         // por lo que se reserva la memoria una sola vez (que será el número de partículas * 2) para evitar ir ampliando el array
+
+        // ______________1. Actualización de partículas______________
+        // Variable para medición de tiempo de actualización
+        auto update_start = std::chrono::high_resolution_clock::now(); //inicio
 
         //Se recorre cada una de las partículas (i es el índice de la partícula actual):
         for (std::size_t i = 0; i < particles.size(); ++i) {
@@ -449,6 +454,16 @@ int main() {
 
         }
 
+        auto update_end = std::chrono::high_resolution_clock::now(); //fin
+
+        // Acumulamos el tiempo de actualización si estamos en fase de test
+        if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
+            std::chrono::duration<double, std::milli> frameMS = update_end - update_start;
+            acumuladoUpdateParticulas += frameMS.count();
+        }
+
+        // ______________2. Renderizado______________
+
         window.draw(lines); //Se dibujan todas las líneas de todas las partículas de golpe (más eficiente que
         // dibujar una a una)
         //window.draw(fpsText); //Se muestra el frame rate
@@ -467,26 +482,34 @@ int main() {
     std::chrono::duration<double> elapsed = endTime - startTime;
     double totalSeconds = elapsed.count();
     double msPerFrame = (totalSeconds * 1000.0) / TOTAL_TEST_FRAMES;
-    double mediaCPUms = (acumuladoCPU * 1000.0) / TOTAL_TEST_FRAMES;
-    double mediaGPUms = (acumuladoGPU * 1000.0) / TOTAL_TEST_FRAMES;
+    double mediaCPUms = acumuladoCPU / TOTAL_TEST_FRAMES; //ya en milisegundos
+    double mediaGPUms = acumuladoGPU / TOTAL_TEST_FRAMES; //ya en milisegundos
+    double mediaUpdateMs = acumuladoUpdateParticulas / TOTAL_TEST_FRAMES;
+
+    // Dependiendo de si se usa CPU o GPU para la función del flowfield, el tiempo total de simulación es la suma de ambos
+    double tiempoTotalSimulacion = (cpu ? mediaCPUms : mediaGPUms) + mediaUpdateMs;
 
     // --- Informe Final en Consola ---
     std::cout << "--------------------------------------" << std::endl;
     std::cout << "DATOS DE LA EJECUCION:" << std::endl;
-    std::cout << "Numero de particulas: " << N << "\n";
-    std::cout << "Dimensiones Flowfield: " << cols << " x " << rows << "\n";
+    std::cout << "-Numero de particulas: " << N << "\n";
+    std::cout << "-Dimensiones Flowfield: " << cols << " x " << rows << "\n";
     std::cout << std::endl;
     std::cout << "RESULTADOS DE LA REPETICION:" << std::endl;
-    std::cout << "Frames medidos: " << TOTAL_TEST_FRAMES << " (tras " << WARMUP_FRAMES << " de warm-up)" << std::endl;
-    std::cout << "Tiempo total: " << totalSeconds << " s" << std::endl;
-    std::cout << "Media (ms/frame): " << msPerFrame << " ms" << std::endl;
-    std::cout << "FPS medios: " << TOTAL_TEST_FRAMES / totalSeconds << " FPS" << std::endl;
+    std::cout << "-Frames medidos: " << TOTAL_TEST_FRAMES << " (tras " << WARMUP_FRAMES << " de warm-up)" << std::endl;
+    std::cout << "-Tiempo total: " << totalSeconds << " s" << std::endl;
+    std::cout << "-Media (ms/frame): " << msPerFrame << " ms" << std::endl;
+    std::cout << "-FPS medios: " << TOTAL_TEST_FRAMES / totalSeconds << " FPS" << std::endl;
 
     if (cpu) { //Si se genera el flowfield en cpu:
-        std::cout << "Tiempo de generacion flowfield en CPU: " << mediaCPUms << " ms" << std::endl;
+        std::cout << "-Tiempo de generacion del flowfield en CPU: " << mediaCPUms << " ms" << std::endl;
+        std::cout << "-Tiempo de actualizacion de las particulas: " << mediaUpdateMs << " ms" << std::endl;
+        std::cout << "-Tiempo de generacion flowfield en CPU + actualizacion particulas: " << tiempoTotalSimulacion << " ms" << std::endl;
     }
     else { //Si se genera en GPU
-        std::cout << "Tiempo de generacion flowfield en GPU: " << mediaGPUms << " ms" << std::endl;
+        std::cout << "-Tiempo de generacion del flowfield en GPU: " << mediaGPUms << " ms" << std::endl;
+        std::cout << "-Tiempo de actualizacion de las particulas: " << mediaUpdateMs << " ms" << std::endl;
+        std::cout << "-Tiempo de generacion flowfield en GPU + actualizacion particulas: " << tiempoTotalSimulacion << " ms" << std::endl;
     }
     std::cout << "--------------------------------------" << std::endl;
 
