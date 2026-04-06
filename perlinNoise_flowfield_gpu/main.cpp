@@ -220,7 +220,7 @@ void flowfield_cpu(Perlin3D& perlin, const float inc, const int cols, const int 
         yoff += inc;
     }
     //Avanzamos el tiempo para animar lentamente el flowfield
-    zoff += 0.0003f;
+    //zoff += 0.0003f;
 }
 
 // ------------------------ Función principal ------------------------
@@ -257,7 +257,7 @@ int main() {
     // que guarda la dirección que seguirán las partículas
     std::vector<sf::Vector2f> flowfield(flowCount);
 
-    const int N = 5000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
+    const int N = 500000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
     std::mt19937 rng(42); //generador de números aleatorios con semilla fija = 42
     std::uniform_real_distribution<float> rx(0.f, (float)WIDTH); //posición x aleatoria
     std::uniform_real_distribution<float> ry(0.f, (float)HEIGHT); //posición y aleatoria
@@ -393,11 +393,12 @@ int main() {
             std::chrono::duration<double, std::milli> frameMS = cpu_end - cpu_start;
             acumuladoCPU += frameMS.count();
         }
+
         */
 
         //______________Generación en GPU______________
         
-        // /*
+        
         //1. Llamamos a la función que prepara y lanza el kernel
         float timeGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
 
@@ -405,7 +406,7 @@ int main() {
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
             acumuladoGPU += timeGPU;
         }
-        // */
+        
 
         //2. Aumentamos el tiempo manualmente:
         zoff += 0.001f; 
