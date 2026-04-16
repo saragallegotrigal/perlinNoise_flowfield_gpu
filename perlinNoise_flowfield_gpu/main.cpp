@@ -17,7 +17,7 @@
 struct Perlin3D {
     std::vector<int> p;
 
-    Perlin3D(unsigned seed = 1337) {
+    Perlin3D(unsigned seed) { 
         p.resize(256); //tamaño del vector de puntos p
         std::iota(p.begin(), p.end(), 0); //se llena el vector (0, 1, 2... 255)
         std::mt19937 rng(seed); //se CREA el generador de números aleatorios y lo inicializa con la seed 1337
@@ -223,6 +223,77 @@ void flowfield_cpu(Perlin3D& perlin, const float inc, const int cols, const int 
     //zoff += 0.0003f;
 }
 
+// ============================================================================
+// APARTADO 2.2: VALIDACIÓN TEMPORAL (Propagación del Error T=1 hasta T=10000)
+// ============================================================================
+
+void realizar_test_error(int frames_objetivo, int N_test, int cols, int rows, float inc, unsigned seed, Perlin3D& perlin, std::vector<float>& xoff_matrix, std::vector<float>& yoff_matrix) {
+
+    // 1. Inicialización idéntica para ambos
+    std::vector<Particle> particles_cpu;
+    std::vector<Particle> particles_gpu;
+    std::mt19937 rng_test(seed);
+    std::uniform_real_distribution<float> rx(0.f, 960.f);
+    std::uniform_real_distribution<float> ry(0.f, 540.f);
+
+    for (int i = 0; i < N_test; ++i) {
+        float x = rx(rng_test), y = ry(rng_test);
+        particles_cpu.emplace_back(x, y, 0);
+        particles_gpu.emplace_back(x, y, 0);
+    }
+
+    std::vector<sf::Vector2f> ff_cpu(cols * rows);
+    std::vector<sf::Vector2f> ff_gpu(cols * rows);
+    float zoff_test = 0.0f;
+
+    // 2. Bucle de simulación hasta el frame objetivo
+    for (int t = 1; t <= frames_objetivo; t++) {
+        // Generar Flowfields
+        flowfield_cpu(perlin, inc, cols, rows, ff_cpu, zoff_test);
+        launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff_test, reinterpret_cast<float2_simple*>(ff_gpu.data()), cols, rows);
+
+        // Actualizar CPU
+        for (auto& p : particles_cpu) {
+            int idx = p.index(cols, rows, 10.f);
+            p.applyForce(ff_cpu[idx]);
+            p.update();
+            p.edges(960, 540);
+        }
+        // Actualizar GPU
+        for (auto& p : particles_gpu) {
+            int idx = p.index(cols, rows, 10.f);
+            p.applyForce(ff_gpu[idx]);
+            p.update();
+            p.edges(960, 540);
+        }
+        zoff_test += 0.001f;
+    }
+
+    // 3. Cálculo de métricas al final del periodo T
+    double sumErrorSq = 0;
+    double sumDiff = 0;
+    float maxDiff = 0;
+
+
+    for (int i = 0; i < N_test; i++) {
+        float dx = particles_cpu[i].pos.x - particles_gpu[i].pos.x;
+        float dy = particles_cpu[i].pos.y - particles_gpu[i].pos.y;
+        float dist = std::sqrt(dx * dx + dy * dy);
+
+        sumDiff += dist;
+        sumErrorSq += (dist * dist);
+        if (dist > maxDiff) maxDiff = dist;
+    }
+
+
+    std::cout << "RESULTADOS PARA T = " << frames_objetivo << ":" << std::endl;
+    std::cout << "Seed = " << seed << std::endl;
+    std::cout << "- Dif. Media: " << sumDiff / N_test << " px" << std::endl;
+    std::cout << "- Dif. Maxima: " << maxDiff << " px" << std::endl;
+    std::cout << "- RMSE: " << std::sqrt(sumErrorSq / N_test) << std::endl;
+    std::cout << "--------------------------------------" << std::endl;
+}
+
 // ------------------------ Función principal ------------------------
 int main() {
     const int WIDTH = 960; //ancho de la ventana
@@ -233,6 +304,9 @@ int main() {
     const int cols = (int)std::floor(WIDTH / scl); //número de columnas redondeado hacia abajo: floor(960/10)
     const int rows = (int)std::floor(HEIGHT / scl); //número de filas redondeado hacia abajo: floor(540/10)
     const size_t flowCount = (size_t)cols * (size_t)rows; //número total de vectores del flowfield (filas*columnas)
+
+    //Semilla
+    unsigned seed = 1337; //1337, 2026, 8, 21, 100
 
     /*
     //Versión SFML
@@ -257,7 +331,7 @@ int main() {
     // que guarda la dirección que seguirán las partículas
     std::vector<sf::Vector2f> flowfield(flowCount);
 
-    const int N = 500000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
+    const int N = 5000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
     std::mt19937 rng(42); //generador de números aleatorios con semilla fija = 42
     std::uniform_real_distribution<float> rx(0.f, (float)WIDTH); //posición x aleatoria
     std::uniform_real_distribution<float> ry(0.f, (float)HEIGHT); //posición y aleatoria
@@ -269,7 +343,7 @@ int main() {
         particles.emplace_back(rx(rng), ry(rng), rh(rng));
     }
 
-    Perlin3D perlin(1337); //semilla para perlin noise
+    Perlin3D perlin(seed); //semilla para perlin noise
     float zoff = 0.f; // tiempo -> si se cambia, el campo se mueve; si no -> el flowfield queda fijo
 
     // Variables para el protocolo de pruebas (warm-up)
@@ -286,49 +360,16 @@ int main() {
     for (int j = 0; j < rows; ++j) yoff_matrix[j] = j * inc;
 
     // ============================================================================
-    // APARTADO 2.2: VALIDACIÓN NUMÉRICA (CPU vs GPU)
-    // ============================================================================
-    /*
-    std::cout << "Iniciando comparativa numerica..." << std::endl;
+    // Llamada función para validación numérica
 
-    // 1. Creamos un vector temporal para guardar el resultado de la CPU
-    std::vector<sf::Vector2f> flowfield_cpu_test(flowCount);
-    float zoff_test = 0.0f; // Usamos tiempo cero para ambos
+    std::vector<int> n_fotogramas = { 1, 10, 100, 1000, 10000, 100000};
 
-    // 2. Calculamos el campo con la CPU
-    flowfield_cpu(perlin, inc, cols, rows, flowfield_cpu_test, zoff_test);
-
-    // 3. Calculamos el campo con la GPU (el resultado quedará en tu vector 'flowfield')
-    zoff_test = 0.0f; // Reseteamos el tiempo para que sea identico
-    launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff_test, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows);
-
-    // 4. Cálculo de métricas: Diferencia Media y RMSE
-    double sumErrorSq = 0;
-    double sumDiff = 0;
-    float maxDiff = 0;
-
-    for (size_t i = 0; i < flowCount; i++) {
-        // Calculamos la distancia euclídea entre el vector CPU y el GPU
-        float dx = flowfield_cpu_test[i].x - flowfield[i].x;
-        float dy = flowfield_cpu_test[i].y - flowfield[i].y;
-        float diff = std::sqrt(dx * dx + dy * dy);
-
-        sumDiff += diff;
-        sumErrorSq += (diff * diff);
-        if (diff > maxDiff) maxDiff = diff;
+    for (int valor : n_fotogramas) { //para cada cúmulo de fotogramas
+        realizar_test_error(valor, 10000, cols, rows, inc, seed, perlin, xoff_matrix, yoff_matrix);
     }
 
-    double meanDiff = sumDiff / flowCount;
-    double rmse = std::sqrt(sumErrorSq / flowCount);
-
-    std::cout << "--- ERROR NUMERICO ---" << std::endl;
-    std::cout << "Diferencia media: " << meanDiff << std::endl;
-    std::cout << "RMSE: " << rmse << std::endl;
-    std::cout << "Diferencia Max: " << maxDiff << std::endl;
-    std::cout << "-------------------------------" << std::endl << std::endl;
-    */
     // ============================================================================
-
+    
     //Variables para medir tiempos:
     using clockFPS = std::chrono::high_resolution_clock; //declaración del reloj
     auto startTime = clockFPS::now(); //inicio tiempo
@@ -493,8 +534,9 @@ int main() {
     // --- Informe Final en Consola ---
     std::cout << "--------------------------------------" << std::endl;
     std::cout << "DATOS DE LA EJECUCION:" << std::endl;
-    std::cout << "-Numero de particulas: " << N << "\n";
-    std::cout << "-Dimensiones Flowfield: " << cols << " x " << rows << "\n";
+    std::cout << "-Numero de particulas: " << N << std::endl;
+    std::cout << "-Dimensiones Flowfield: " << cols << " x " << rows << std::endl;
+    std::cout << "-Seed: " << seed << std::endl;
     std::cout << std::endl;
     std::cout << "RESULTADOS DE LA REPETICION:" << std::endl;
     std::cout << "-Frames medidos: " << TOTAL_TEST_FRAMES << " (tras " << WARMUP_FRAMES << " de warm-up)" << std::endl;
@@ -502,7 +544,7 @@ int main() {
     std::cout << "-Media (ms/frame): " << msPerFrame << " ms" << std::endl;
     std::cout << "-FPS medios: " << TOTAL_TEST_FRAMES / totalSeconds << " FPS" << std::endl;
 
-    if (cpu) { //Si se genera el flowfield en cpu:
+    if (cpu) { //Si se genera el flowfield en CPU:
         std::cout << "-Tiempo de generacion del flowfield en CPU: " << mediaCPUms << " ms" << std::endl;
         std::cout << "-Tiempo de actualizacion de las particulas: " << mediaUpdateMs << " ms" << std::endl;
         std::cout << "-Tiempo de generacion flowfield en CPU + actualizacion particulas: " << tiempoTotalSimulacion << " ms" << std::endl;
