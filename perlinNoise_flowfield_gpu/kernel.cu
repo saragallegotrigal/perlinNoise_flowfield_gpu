@@ -143,16 +143,19 @@ __global__ void update_particles_kernel(ParticleGPU* particles, float2_simple* f
         force.y = flowfield[ff_idx].y;
 
         // 2. Actualizar física
-        p.prevPos = p.pos;
+        float2_simple oldPos = p.pos;
+
         p.vel.x += force.x;
         p.vel.y += force.y;
 
-        limit_vel(p.vel, 2.0f); // maxSpeed = 2.0
-
+        limit_vel(p.vel, p.maxSpeed);
         p.pos.x += p.vel.x;
         p.pos.y += p.vel.y;
 
+        p.prevPos = oldPos;
+
         // 3. Bordes (Wrap)
+        
         bool wrapped = false;
         if (p.pos.x > width) { p.pos.x = 0; wrapped = true; }
         if (p.pos.x < 0) { p.pos.x = width; wrapped = true; }
@@ -160,6 +163,7 @@ __global__ void update_particles_kernel(ParticleGPU* particles, float2_simple* f
         if (p.pos.y < 0) { p.pos.y = height; wrapped = true; }
 
         if (wrapped) p.prevPos = p.pos;
+        
     }
 }
 

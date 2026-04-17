@@ -12,7 +12,9 @@ struct float2_simple {
 struct ParticleGPU {
     float2_simple pos;
     float2_simple vel;
+    float2_simple acc;
     float2_simple prevPos;
+    float maxSpeed;
     float hue;
 };
 

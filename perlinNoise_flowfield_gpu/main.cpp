@@ -295,12 +295,7 @@ void realizar_test_error(int frames_objetivo, int N_test, int cols, int rows, fl
     std::cout << "--------------------------------------" << std::endl;
 }
 
-void update_particles_cpu(
-    std::vector<Particle>& particles,
-    const std::vector<sf::Vector2f>& flowfield,
-    sf::VertexArray& lines,
-    int cols, int rows, float scl,
-    int WIDTH, int HEIGHT)
+void update_particles_cpu(std::vector<Particle>& particles, const std::vector<sf::Vector2f>& flowfield, sf::VertexArray& lines, int cols, int rows, float scl, int WIDTH, int HEIGHT)
 {
     for (std::size_t i = 0; i < particles.size(); ++i) {
         auto& p = particles[i];
@@ -320,7 +315,7 @@ void update_particles_cpu(
         float dx = std::abs(p.pos.x - p.prevPos.x);
         float dy = std::abs(p.pos.y - p.prevPos.y);
 
-        sf::Color c = sf::Color(0, 0, 0, 25); // Color negro suave
+        sf::Color c = sf::Color(234, 137, 154, 50); // Color rosita suave
 
         if (dx > 50.f || dy > 50.f) {
             lines[vIndex].position = p.pos;
@@ -427,6 +422,13 @@ int main() {
     //CPU o GPU
     bool cpu = false;
 
+    if (sizeof(Particle) != sizeof(ParticleGPU)) {
+        std::cerr << "ERROR: Desajuste de memoria critico!" << std::endl;
+        std::cerr << "CPU: " << sizeof(Particle) << " bytes" << std::endl;
+        std::cerr << "GPU: " << sizeof(ParticleGPU) << " bytes" << std::endl;
+        return -1;
+    }
+
     // loop principal -> mientras la ventana esté activa (abierta)
     while (window.isOpen()) {
 
@@ -528,21 +530,22 @@ int main() {
             float dx = std::abs(p.pos.x - p.prevPos.x);
             float dy = std::abs(p.pos.y - p.prevPos.y);
 
+            sf::Color c = sf::Color(234, 137, 154, 25);
+
+            // Si la distancia es muy grande, es un salto de borde. 
+            // Dibujamos un punto en lugar de una línea cruzada.
             if (dx > 50.f || dy > 50.f) {
-                p.prevPos = p.pos;
+                lines[vIndex].position = p.pos;
+            }
+            else {
+                lines[vIndex].position = p.prevPos;
             }
 
-            // --- CAMBIO A COLOR NEGRO ---
-            // Color negro (0,0,0) con alpha 25 (muy suave para que se acumule)
-            sf::Color c = sf::Color(0, 0, 0, 25);
-
-            lines[vIndex].position = p.prevPos;
-            lines[vIndex].color = c;
-
             lines[vIndex + 1].position = p.pos;
+            lines[vIndex].color = c;
             lines[vIndex + 1].color = c;
 
-            p.updatePrev();
+            p.updatePrev(); // Importante mantener esto para el siguiente ciclo
         }
         
 
