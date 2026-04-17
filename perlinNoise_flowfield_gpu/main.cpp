@@ -5,6 +5,7 @@
 #include <cmath> //sin, cos, sqrt, floor
 #include <algorithm> //shiffle, iota
 #include <numeric>
+#include <cuda_runtime.h>
 
 //medir tiempo:
 #include <chrono>
@@ -294,6 +295,50 @@ void realizar_test_error(int frames_objetivo, int N_test, int cols, int rows, fl
     std::cout << "--------------------------------------" << std::endl;
 }
 
+void update_particles_cpu(
+    std::vector<Particle>& particles,
+    const std::vector<sf::Vector2f>& flowfield,
+    sf::VertexArray& lines,
+    int cols, int rows, float scl,
+    int WIDTH, int HEIGHT)
+{
+    for (std::size_t i = 0; i < particles.size(); ++i) {
+        auto& p = particles[i];
+
+        // 1. Obtener fuerza del flowfield y aplicar
+        int idx = p.index(cols, rows, scl);
+        p.applyForce(flowfield[idx]);
+
+        // 2. Actualizar física y bordes
+        p.update();
+        p.edges(WIDTH, HEIGHT);
+
+        // 3. Actualizar el VertexArray para SFML
+        std::size_t vIndex = i * 2;
+
+        // Evitar líneas que cruzan la pantalla (Wrap-around check)
+        float dx = std::abs(p.pos.x - p.prevPos.x);
+        float dy = std::abs(p.pos.y - p.prevPos.y);
+
+        sf::Color c = sf::Color(0, 0, 0, 25); // Color negro suave
+
+        if (dx > 50.f || dy > 50.f) {
+            lines[vIndex].position = p.pos;
+            lines[vIndex + 1].position = p.pos;
+        }
+        else {
+            lines[vIndex].position = p.prevPos;
+            lines[vIndex + 1].position = p.pos;
+        }
+
+        lines[vIndex].color = c;
+        lines[vIndex + 1].color = c;
+
+        // 4. Preparar para el siguiente frame
+        p.updatePrev();
+    }
+}
+
 // ------------------------ Función principal ------------------------
 int main() {
     const int WIDTH = 960; //ancho de la ventana
@@ -331,7 +376,7 @@ int main() {
     // que guarda la dirección que seguirán las partículas
     std::vector<sf::Vector2f> flowfield(flowCount);
 
-    const int N = 5000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
+    const int N = 100000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
     std::mt19937 rng(42); //generador de números aleatorios con semilla fija = 42
     std::uniform_real_distribution<float> rx(0.f, (float)WIDTH); //posición x aleatoria
     std::uniform_real_distribution<float> ry(0.f, (float)HEIGHT); //posición y aleatoria
@@ -361,12 +406,13 @@ int main() {
 
     // ============================================================================
     // Llamada función para validación numérica
-
+    /*
     std::vector<int> n_fotogramas = { 1, 10, 100, 1000, 10000, 100000};
 
     for (int valor : n_fotogramas) { //para cada cúmulo de fotogramas
         realizar_test_error(valor, 10000, cols, rows, inc, seed, perlin, xoff_matrix, yoff_matrix);
     }
+    */
 
     // ============================================================================
     
@@ -441,11 +487,11 @@ int main() {
         
         
         //1. Llamamos a la función que prepara y lanza el kernel
-        float timeGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
+        float flowfield_timeGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
 
         // Solo acumulamos si estamos en la fase de medición (tras el warm-up)
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
-            acumuladoGPU += timeGPU;
+            acumuladoGPU += flowfield_timeGPU;
         }
         
 
@@ -454,7 +500,7 @@ int main() {
 
         // ------------- ACTUALIZACIÓN DE PARTÍCULAS Y RENDERIZADO -------------
         // Dibujar estela, haciendo desaparecer lo antiguo poco a poco
-        window.draw(fadeRect);
+        //window.draw(fadeRect);
 
         // Dibujar partículas
         sf::VertexArray lines(sf::PrimitiveType::Lines); //cada par de vértices, una línea
@@ -463,51 +509,63 @@ int main() {
         // por lo que se reserva la memoria una sola vez (que será el número de partículas * 2) para evitar ir ampliando el array
 
         // ______________1. Actualización de partículas______________
-        // Variable para medición de tiempo de actualización
-        auto update_start = std::chrono::high_resolution_clock::now(); //inicio
+        
+        // ______________Actualización en GPU______________
+        
+        float particlesUpdate_timeGPU = launch_cuda_update_particles(reinterpret_cast<ParticleGPU*>(particles.data()), reinterpret_cast<float2_simple*>(flowfield.data()), N, cols, rows, (float)scl, WIDTH, HEIGHT);
+        cudaDeviceSynchronize();
 
-        //Se recorre cada una de las partículas (i es el índice de la partícula actual):
-        for (std::size_t i = 0; i < particles.size(); ++i) {
-
-            auto& p = particles[i]; // Referencia a la partícula actual
-
-            int idx = p.index(cols, rows, scl); //convertimos la posición en píxeles de la partícula en una celda del
-            // flowfield (idx es el índice del vector flowfield que le corresponde)
-            p.applyForce(flowfield[(std::size_t)idx]); //Se coge el vector del flowfield en esa celda y se aplica como fuerza a la partícula (vector)
-
-            p.update(); //se actualizan las físicas del vector p -> velocidad += aceleración, se limita la velocidad,
-            // posición += velocidad, aceleración = 0
-            p.edges(WIDTH, HEIGHT); //Si la partícula se sale de la pantalla, reaparece por el lado contrario
-            // para evitar que desaparezcan
-
-            sf::Color c = HSVtoRGBA(p.hue, 255, 255, 20); //Convierte el tono (hue) de la partícula en un
-            // color real con saturación máxima, brillo máximo y alpha = 20 (muy transparente), creando así líneas suaves
-            // efecto de estela y acumulación de color
-
-            // Calculamos el índice en el array de vértices
-            std::size_t vIndex = i * 2;
-
-            // Se escribe en el array de vértices la posición anterior de la partícula y la actual, ambas con mismo color
-            lines[vIndex] = sf::Vertex({ p.prevPos, c });
-            lines[vIndex + 1] = sf::Vertex({ p.pos, c });
-
-            p.updatePrev(); //Se guarda la posición actual como la anterior para preparar para el siguiente frame y que
-            // la estela continue correctamente
-
+        if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
+            acumuladoUpdateParticulas += particlesUpdate_timeGPU;
         }
 
-        auto update_end = std::chrono::high_resolution_clock::now(); //fin
+        // 2. SINCRONIZACIÓN PARA DIBUJAR (CPU)
+        // La GPU ya nos devolvió los datos al array 'particles'. Ahora hay que pasarlos al objeto que SFML sabe dibujar.
+        for (std::size_t i = 0; i < particles.size(); ++i) {
+            auto& p = particles[i];
+            std::size_t vIndex = i * 2;
 
-        // Acumulamos el tiempo de actualización si estamos en fase de test
+            float dx = std::abs(p.pos.x - p.prevPos.x);
+            float dy = std::abs(p.pos.y - p.prevPos.y);
+
+            if (dx > 50.f || dy > 50.f) {
+                p.prevPos = p.pos;
+            }
+
+            // --- CAMBIO A COLOR NEGRO ---
+            // Color negro (0,0,0) con alpha 25 (muy suave para que se acumule)
+            sf::Color c = sf::Color(0, 0, 0, 25);
+
+            lines[vIndex].position = p.prevPos;
+            lines[vIndex].color = c;
+
+            lines[vIndex + 1].position = p.pos;
+            lines[vIndex + 1].color = c;
+
+            p.updatePrev();
+        }
+        
+
+        // ______________Actualización en CPU______________
+
+        /*        
+        auto update_start = std::chrono::high_resolution_clock::now();
+
+        update_particles_cpu(particles, flowfield, lines, cols, rows, scl, WIDTH, HEIGHT);
+
+        auto update_end = std::chrono::high_resolution_clock::now();
+
+        // Acumular tiempo para estadísticas
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
             std::chrono::duration<double, std::milli> frameMS = update_end - update_start;
             acumuladoUpdateParticulas += frameMS.count();
         }
+        */
 
         // ______________2. Renderizado______________
-
-        window.draw(lines); //Se dibujan todas las líneas de todas las partículas de golpe (más eficiente que
-        // dibujar una a una)
+            
+        window.draw(fadeRect);// Dibujar estela, haciendo desaparecer lo antiguo poco a poco
+        window.draw(lines); //Se dibujan todas las líneas de todas las partículas de golpe (más eficiente que dibujar una a una)
         //window.draw(fpsText); //Se muestra el frame rate
         window.display(); //se muestra el frame por pantalla con lo dibujado en window.draw
 

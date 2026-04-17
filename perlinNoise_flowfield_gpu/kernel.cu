@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cmath>
 #include <iostream>
+#include <vector>
 
 // --- FUNCIONES AUXILIARES (__device__) ---
 //Función que hace que la mezcla ocurra suave al principio y al final
@@ -69,7 +70,17 @@ __device__ float baseNoise(const int* p, float x, float y, float z) {
     return (res + 1.0f) * 0.5f; //El cáculo matemático suele dar valores entre -1 y 1. Como nosotros queremos algo más fácil de manejar (como un color), lo convertimos a un rango de 0 a 1
 }
 
+__device__ void limit_vel(float2_simple& v, float maxMag) {
+    float m2 = v.x * v.x + v.y * v.y;
+    if (m2 > maxMag * maxMag) {
+        float m = sqrtf(m2);
+        v.x = (v.x / m) * maxMag;
+        v.y = (v.y / m) * maxMag;
+    }
+}
+
 // --- KERNEL ---
+//Función kernel generación del flowfield
 __global__ void flowfield_kernel(const int* d_p, const float* d_xoff, const float* d_yoff, const float zoff, float2_simple* d_out, int cols, int rows) {
     // Calculamos el ID del hilo global en 2D
     size_t x_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -107,6 +118,48 @@ __global__ void flowfield_kernel(const int* d_p, const float* d_xoff, const floa
         //Convertimos el ángulo en un vector unitario
         d_out[idx].x = cosf(angle); //guardamos cuánto empuja a la derecha/izquierda
         d_out[idx].y = sinf(angle); //guardamos cúanto empuja hacia arriba/abajo
+    }
+}
+
+//Función kernel actualización de las partículas
+__global__ void update_particles_kernel(ParticleGPU* particles, float2_simple* flowfield, int n, int cols, int rows, float scl, int width, int height) {
+
+    int i = blockIdx.x * blockDim.x + threadIdx.x; // Calculamos el ID del hilo global en 2D
+
+    if (i < n) {
+        ParticleGPU& p = particles[i];
+
+        // 1. Obtener fuerza del flowfield
+        int x_cell = (int)floorf(p.pos.x / scl);
+        int y_cell = (int)floorf(p.pos.y / scl);
+
+        // Clamp para evitar salir del array
+        x_cell = fmaxf(0.0f, fminf((float)cols - 1.0f, (float)x_cell)); //funciones nativas de GPU para min y max
+        y_cell = fmaxf(0.0f, fminf((float)rows - 1.0f, (float)y_cell));
+        int ff_idx = x_cell + y_cell * cols;
+
+        float2_simple force;
+        force.x = flowfield[ff_idx].x;
+        force.y = flowfield[ff_idx].y;
+
+        // 2. Actualizar física
+        p.prevPos = p.pos;
+        p.vel.x += force.x;
+        p.vel.y += force.y;
+
+        limit_vel(p.vel, 2.0f); // maxSpeed = 2.0
+
+        p.pos.x += p.vel.x;
+        p.pos.y += p.vel.y;
+
+        // 3. Bordes (Wrap)
+        bool wrapped = false;
+        if (p.pos.x > width) { p.pos.x = 0; wrapped = true; }
+        if (p.pos.x < 0) { p.pos.x = width; wrapped = true; }
+        if (p.pos.y > height) { p.pos.y = 0; wrapped = true; }
+        if (p.pos.y < 0) { p.pos.y = height; wrapped = true; }
+
+        if (wrapped) p.prevPos = p.pos;
     }
 }
 
@@ -170,6 +223,55 @@ float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_
     d_out = NULL;
     d_p = NULL;
     d_xoff = d_yoff = NULL; //se pueden igualar ambos a NULL a la vez porque son del mismo tipo
+
+    return elapsed;
+}
+
+float launch_cuda_update_particles(ParticleGPU* h_particles, float2_simple* h_flowfield, int n, int cols, int rows, float scl, int width, int height) {
+    // 1. Tamaños y Bytes
+    const size_t PARTICLE_BYTES = n * sizeof(ParticleGPU);
+    const size_t TOTAL_CELLS = (size_t)cols * rows;
+    const size_t FLOW_BYTES = TOTAL_CELLS * sizeof(float2_simple);
+
+    // 2. Declaramos los punteros de memoria en la GPU (Device)
+    ParticleGPU* d_particles = NULL;
+    float2_simple* d_flowfield = NULL;
+
+    // 3. Reservamos memoria en la GPU
+    cudaMalloc(&d_particles, PARTICLE_BYTES);
+    cudaMalloc(&d_flowfield, FLOW_BYTES);
+
+    // 4. Transferimos los datos desde el host (CPU) a la GPU (Device)
+    // NOTA: Como h_particles ya es un ParticleGPU* (según la firma), 
+    // no necesitas el bucle de conversión aquí si ya viene convertido.
+    // Si viene de SFML, la conversión debe hacerse ANTES o cambiar el tipo del parámetro.
+
+    cudaMemcpy(d_particles, h_particles, PARTICLE_BYTES, cudaMemcpyHostToDevice);
+
+    // CORRECCIÓN: h_flowfield ya es float2_simple*, NO es un vector. 
+    // No uses .data() ni reinterpret_cast aquí.
+    cudaMemcpy(d_flowfield, h_flowfield, FLOW_BYTES, cudaMemcpyHostToDevice);
+
+    // 5. Lanzamos el kernel
+    int THREADS_PER_BLOCK = 256;
+    int BLOCKS_PER_GRID = (n + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+
+    GpuTimer timer;
+    timer.Start();
+
+    update_particles_kernel << <BLOCKS_PER_GRID, THREADS_PER_BLOCK >> > (d_particles, d_flowfield, n, cols, rows, scl, width, height);
+
+    //cudaDeviceSynchronize();
+
+    timer.Stop();
+    float elapsed = timer.Elapsed();
+
+    // 6. Copiamos los resultados de vuelta
+    cudaMemcpy(h_particles, d_particles, PARTICLE_BYTES, cudaMemcpyDeviceToHost);
+
+    // 7. Liberar
+    cudaFree(d_particles);
+    cudaFree(d_flowfield);
 
     return elapsed;
 }

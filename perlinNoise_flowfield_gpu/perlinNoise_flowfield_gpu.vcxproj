@@ -86,6 +86,7 @@
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <AdditionalCompilerOptions>
       </AdditionalCompilerOptions>
+      <AdditionalOptions>--std=c++17 %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
