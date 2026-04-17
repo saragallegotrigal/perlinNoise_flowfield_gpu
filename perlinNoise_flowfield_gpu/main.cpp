@@ -371,7 +371,7 @@ int main() {
     // que guarda la dirección que seguirán las partículas
     std::vector<sf::Vector2f> flowfield(flowCount);
 
-    const int N = 100000; //número de partículas: 5000, 10000, 50000, 100000, 200000, 1000000
+    const int N = 1000000; //número de partículas: 5000, 10000, 50000, 100000, 500000, 1000000
     std::mt19937 rng(42); //generador de números aleatorios con semilla fija = 42
     std::uniform_real_distribution<float> rx(0.f, (float)WIDTH); //posición x aleatoria
     std::uniform_real_distribution<float> ry(0.f, (float)HEIGHT); //posición y aleatoria
@@ -419,8 +419,20 @@ int main() {
     double acumuladoGPU = 0.0; // Para sumar los tiempos de cada frame en GPU
     double acumuladoUpdateParticulas = 0.0; // Para sumar solo la lógica de movimiento
 
-    //CPU o GPU
+    //Generación del Flowfield en CPU o GPU
     bool cpu = false;
+
+    // 1. Reservar memoria persistente en la GPU
+    ParticleGPU * d_particles = nullptr;
+    float2_simple* d_flowfield = nullptr;
+    const size_t PARTICLE_BYTES = N * sizeof(ParticleGPU);
+    const size_t FLOW_BYTES = flowCount * sizeof(float2_simple);
+
+    cudaMalloc(&d_particles, PARTICLE_BYTES);
+    cudaMalloc(&d_flowfield, FLOW_BYTES);
+
+    // 2. Copiar los datos iniciales (solo una vez)
+    cudaMemcpy(d_particles, particles.data(), PARTICLE_BYTES, cudaMemcpyHostToDevice);
 
     if (sizeof(Particle) != sizeof(ParticleGPU)) {
         std::cerr << "ERROR: Desajuste de memoria critico!" << std::endl;
@@ -489,7 +501,7 @@ int main() {
         
         
         //1. Llamamos a la función que prepara y lanza el kernel
-        float flowfield_timeGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, reinterpret_cast<float2_simple*>(flowfield.data()), cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
+        float flowfield_timeGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, d_flowfield, cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
 
         // Solo acumulamos si estamos en la fase de medición (tras el warm-up)
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
@@ -514,8 +526,10 @@ int main() {
         
         // ______________Actualización en GPU______________
         
-        float particlesUpdate_timeGPU = launch_cuda_update_particles(reinterpret_cast<ParticleGPU*>(particles.data()), reinterpret_cast<float2_simple*>(flowfield.data()), N, cols, rows, (float)scl, WIDTH, HEIGHT);
+        float particlesUpdate_timeGPU = launch_cuda_update_particles(d_particles, d_flowfield, N, cols, rows, scl, WIDTH, HEIGHT);
         cudaDeviceSynchronize();
+
+        cudaMemcpy(particles.data(), d_particles, PARTICLE_BYTES, cudaMemcpyDeviceToHost);
 
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
             acumuladoUpdateParticulas += particlesUpdate_timeGPU;
@@ -580,7 +594,10 @@ int main() {
             endTime = clockFPS::now();
             window.close(); // Cerramos automáticamente para la siguiente repetición
         }
+
     }
+    cudaFree(d_particles);
+    cudaFree(d_flowfield);
 
     std::chrono::duration<double> elapsed = endTime - startTime;
     double totalSeconds = elapsed.count();

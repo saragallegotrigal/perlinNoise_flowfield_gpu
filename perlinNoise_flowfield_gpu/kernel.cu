@@ -134,36 +134,41 @@ __global__ void update_particles_kernel(ParticleGPU* particles, float2_simple* f
         int y_cell = (int)floorf(p.pos.y / scl);
 
         // Clamp para evitar salir del array
-        x_cell = fmaxf(0.0f, fminf((float)cols - 1.0f, (float)x_cell)); //funciones nativas de GPU para min y max
-        y_cell = fmaxf(0.0f, fminf((float)rows - 1.0f, (float)y_cell));
+        if (x_cell >= cols) x_cell = cols - 1;
+        if (y_cell >= rows) y_cell = rows - 1;
+        if (x_cell < 0) x_cell = 0;
+        if (y_cell < 0) y_cell = 0;
+
         int ff_idx = x_cell + y_cell * cols;
+        float2_simple force = flowfield[ff_idx];
 
-        float2_simple force;
-        force.x = flowfield[ff_idx].x;
-        force.y = flowfield[ff_idx].y;
+        p.acc.x = force.x; // Simulamos applyForce
+        p.acc.y = force.y;
 
-        // 2. Actualizar física
         float2_simple oldPos = p.pos;
 
-        p.vel.x += force.x;
-        p.vel.y += force.y;
+        p.vel.x += p.acc.x;
+        p.vel.y += p.acc.y;
 
         limit_vel(p.vel, p.maxSpeed);
+
         p.pos.x += p.vel.x;
         p.pos.y += p.vel.y;
 
-        p.prevPos = oldPos;
+        p.acc.x = 0; // Reset acc
+        p.acc.y = 0;
 
-        // 3. Bordes (Wrap)
-        
+        p.prevPos = oldPos; // updatePrev implícito
+
+        // 3. Bordes
         bool wrapped = false;
-        if (p.pos.x > width) { p.pos.x = 0; wrapped = true; }
-        if (p.pos.x < 0) { p.pos.x = width; wrapped = true; }
-        if (p.pos.y > height) { p.pos.y = 0; wrapped = true; }
-        if (p.pos.y < 0) { p.pos.y = height; wrapped = true; }
+        if (p.pos.x >= width) { p.pos.x = 0; wrapped = true; }
+        else if (p.pos.x < 0) { p.pos.x = (float)width - 0.1f; wrapped = true; }
 
-        if (wrapped) p.prevPos = p.pos;
+        if (p.pos.y >= height) { p.pos.y = 0; wrapped = true; }
+        else if (p.pos.y < 0) { p.pos.y = (float)height - 0.1f; wrapped = true; }
         
+        if (wrapped) p.prevPos = p.pos;
     }
 }
 
@@ -231,51 +236,18 @@ float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_
     return elapsed;
 }
 
-float launch_cuda_update_particles(ParticleGPU* h_particles, float2_simple* h_flowfield, int n, int cols, int rows, float scl, int width, int height) {
-    // 1. Tamaños y Bytes
-    const size_t PARTICLE_BYTES = n * sizeof(ParticleGPU);
-    const size_t TOTAL_CELLS = (size_t)cols * rows;
-    const size_t FLOW_BYTES = TOTAL_CELLS * sizeof(float2_simple);
-
-    // 2. Declaramos los punteros de memoria en la GPU (Device)
-    ParticleGPU* d_particles = NULL;
-    float2_simple* d_flowfield = NULL;
-
-    // 3. Reservamos memoria en la GPU
-    cudaMalloc(&d_particles, PARTICLE_BYTES);
-    cudaMalloc(&d_flowfield, FLOW_BYTES);
-
-    // 4. Transferimos los datos desde el host (CPU) a la GPU (Device)
-    // NOTA: Como h_particles ya es un ParticleGPU* (según la firma), 
-    // no necesitas el bucle de conversión aquí si ya viene convertido.
-    // Si viene de SFML, la conversión debe hacerse ANTES o cambiar el tipo del parámetro.
-
-    cudaMemcpy(d_particles, h_particles, PARTICLE_BYTES, cudaMemcpyHostToDevice);
-
-    // CORRECCIÓN: h_flowfield ya es float2_simple*, NO es un vector. 
-    // No uses .data() ni reinterpret_cast aquí.
-    cudaMemcpy(d_flowfield, h_flowfield, FLOW_BYTES, cudaMemcpyHostToDevice);
-
-    // 5. Lanzamos el kernel
+float launch_cuda_update_particles(ParticleGPU* d_particles, float2_simple* d_flowfield, int n, int cols, int rows, float scl, int width, int height) {
     int THREADS_PER_BLOCK = 256;
     int BLOCKS_PER_GRID = (n + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     GpuTimer timer;
     timer.Start();
 
+    // Lanzamos el kernel (los datos ya están en la VRAM de la GPU)
     update_particles_kernel << <BLOCKS_PER_GRID, THREADS_PER_BLOCK >> > (d_particles, d_flowfield, n, cols, rows, scl, width, height);
-
-    //cudaDeviceSynchronize();
 
     timer.Stop();
     float elapsed = timer.Elapsed();
-
-    // 6. Copiamos los resultados de vuelta
-    cudaMemcpy(h_particles, d_particles, PARTICLE_BYTES, cudaMemcpyDeviceToHost);
-
-    // 7. Liberar
-    cudaFree(d_particles);
-    cudaFree(d_flowfield);
 
     return elapsed;
 }
