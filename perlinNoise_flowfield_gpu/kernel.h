@@ -18,8 +18,13 @@ struct ParticleGPU {
     float hue;
 };
 
+struct GpuMetrics {
+    float kernelTime;
+    float transferTime;
+};
+
 // Función que se llama desde main.cpp y devuelve el tiempo que tarda en generarse el flowfield en la GPU
-float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows);
+GpuMetrics launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows);
 
 // Función para lanzar la actualización de partículas
-float launch_cuda_update_particles(ParticleGPU* h_particles, float2_simple* h_flowfield, int n, int cols, int rows, float scl, int width, int height);
+GpuMetrics launch_cuda_update_particles(ParticleGPU* h_particles, float2_simple* h_flowfield, int n, int cols, int rows, float scl, int width, int height);

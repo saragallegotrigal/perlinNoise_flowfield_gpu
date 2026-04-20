@@ -173,9 +173,13 @@ __global__ void update_particles_kernel(ParticleGPU* particles, float2_simple* f
 }
 
 // --- FUNCIÓN DE LANZAMIENTO ---
-float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows) {
+GpuMetrics launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_yoff, float zoff, float2_simple* h_out, int cols, int rows) {
 
     //std::cout << "EJECUCION EN GPU" << std::endl;
+
+    // 0. Para medir tiempos:
+    GpuMetrics metrics;
+    GpuTimer timer;
 
     // 1. Tamaños y Bytes
     const size_t TOTAL_CELLS = (size_t)cols * rows; //búmero total de celdas
@@ -183,6 +187,7 @@ float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_
     const size_t PERM_BYTES = 512 * sizeof(int); //la tabla de permutación de Perlin tiene 512 elementos de tipo int, por lo que ocupará 512 * sozepf(int)
     const size_t XOFF_BYTES = cols * sizeof(float); //cada columna tienen un offset X de tipo float que ocupará el número de columnas * sizeof(float)
     const size_t YOFF_BYTES = rows * sizeof(float); //cada fila tiene un offset Y de tipo float que ocupará el número de filas * sizeof(float)
+
 
     // 2. Declaramos los punteros de memoria en la GPU (Device)
     float2_simple* d_out = NULL; //Declaración de puntero para array flowfield de salida
@@ -196,32 +201,42 @@ float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_
     cudaMalloc(&d_xoff, XOFF_BYTES); //reserva del espacio necesario para los offset en x (columnas)
     cudaMalloc(&d_yoff, YOFF_BYTES); //reserva del espacio necesario para los offset en y (filas)
 
+    // --- MEDICIÓN DE TRANSFERENCIA: IDA (Host to Device) ---
     // 4. Transferimos los datos desde el host (CPU) a la GPU (Device)
+    timer.Start();
+
     cudaMemcpy(d_p, h_p, PERM_BYTES, cudaMemcpyHostToDevice); //se copian los datos de h_p a d_p que ocupan PER_BYTES
     cudaMemcpy(d_xoff, h_xoff, XOFF_BYTES, cudaMemcpyHostToDevice); //se copian los datos de los offsets de h_xoff a d_xoff que ocupan XOFF_BYTES
     cudaMemcpy(d_yoff, h_yoff, YOFF_BYTES, cudaMemcpyHostToDevice); //se copian los datos de los offsets de h_yoff a d_yoff que ocupan YOFF_BYTES
 
-    // 5. Lanzamos el kernel (Configuración de rejilla 2D)
+    timer.Stop();
+    float timeIda = timer.Elapsed();// Guardamos el primer tramo (Ida)
+
+    // --- MEDICIÓN DE CÓMPUTO EN GPU --- 
+    // 5. Configuración de rejilla 2D y Lanzamiento del kernel
     dim3 THREADS_PER_BLOCK(16, 16, 1); //número de hilos en cada bloque -> 16 en x, 16 en y, ninguno en z -> 16*16 = 256
     dim3 BLOCKS_PER_GRID( //el número de bloques por grid será:
         (size_t)ceil((float)cols / THREADS_PER_BLOCK.x),  //ceil(número total de columnas / número de hilos en x)
         (size_t)ceil((float)rows / THREADS_PER_BLOCK.y) //ceil(número total de filas / números de hilos en y)
     );
 
-    // 5.1 Declaramos las variables necesarias para medir el tiempo de ejecución en GPU y lanzamos el kernel
-    GpuTimer timer;
-    
-    //Inicio del temporizador
-    timer.Start();
+    timer.Start(); //Inicio del temporizador
 
     flowfield_kernel << <BLOCKS_PER_GRID, THREADS_PER_BLOCK >> > (d_p, d_xoff, d_yoff, zoff, d_out, cols, rows); //lanzamiento del kernel
 
-    //Fin del temporizador
-    timer.Stop();
-    float elapsed = timer.Elapsed();
+    timer.Stop();//Fin del temporizador
+    metrics.kernelTime = timer.Elapsed();
 
+    // --- MEDICIÓN DE TRANSFERENCIA: VUELTA (Device to Host) ---
     // 6. Copiamos el array de resultados desde la GPU al host
+    timer.Start(); // Inicio del temporizador
+
     cudaMemcpy(h_out, d_out, FLOW_BYTES, cudaMemcpyDeviceToHost);
+
+    timer.Stop(); //Fin del temporizador
+
+    //TIEMPO TOTAL DE TRANSFERENCIAS
+    metrics.transferTime = timeIda + timer.Elapsed();
 
     // 7. Se libera la memoria reservada en la GPU
     cudaFree(d_out);
@@ -233,21 +248,26 @@ float launch_cuda_flowfield(const int* h_p, const float* h_xoff, const float* h_
     d_p = NULL;
     d_xoff = d_yoff = NULL; //se pueden igualar ambos a NULL a la vez porque son del mismo tipo
 
-    return elapsed;
+    return metrics;
 }
 
-float launch_cuda_update_particles(ParticleGPU* d_particles, float2_simple* d_flowfield, int n, int cols, int rows, float scl, int width, int height) {
+GpuMetrics launch_cuda_update_particles(ParticleGPU* d_particles, float2_simple* d_flowfield, int n, int cols, int rows, float scl, int width, int height) {
+    // 0. Para medir tiempos:
+    GpuMetrics metrics;
+    GpuTimer timer;
+
+    // --- MEDICIÓN DE CÓMPUTO EN GPU --- 
+    // 1. Configuración de rejilla 2D y Lanzamiento del kernel
     int THREADS_PER_BLOCK = 256;
     int BLOCKS_PER_GRID = (n + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
-    GpuTimer timer;
-    timer.Start();
+    timer.Start(); //Inicio del temporizador
 
     // Lanzamos el kernel (los datos ya están en la VRAM de la GPU)
     update_particles_kernel << <BLOCKS_PER_GRID, THREADS_PER_BLOCK >> > (d_particles, d_flowfield, n, cols, rows, scl, width, height);
 
-    timer.Stop();
-    float elapsed = timer.Elapsed();
+    timer.Stop(); //Fin del temporizador
+    metrics.kernelTime = timer.Elapsed();
 
-    return elapsed;
+    return metrics;
 }
