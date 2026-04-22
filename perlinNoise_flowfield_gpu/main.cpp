@@ -433,7 +433,7 @@ int main() {
     // ------------------------ RESERVA DE MEMORIA UNA ÚNICA VEZ PARA ACT. PARTÍCULAS EN GPU ------------------------
     // 
 
-    //SE EJECUTA SIEMPRE:
+    //SE EJECUTA SIEMPRE SI EL FLOWFIELD SE GENERA EN GPU:
     /*
     float2_simple* d_flowfield = nullptr;
     const size_t FLOW_BYTES = flowCount * sizeof(float2_simple);
@@ -744,7 +744,7 @@ int main() {
     std::cout << "TIEMPOS FINALES" << ((media_FF_Trans || media_Part_Trans) > 0 ? " (CON TRANSFERENCIAS): " : ": ") << std::endl;
     std::cout << "- Generacion Flowfield (" << (boolFlowfield_cpu ? "CPU" : "GPU") << "): " << media_FFms + media_FF_Trans << " ms" << std::endl;
     std::cout << "- Actualizacion Particulas (" << (boolParticlesUpdate_cpu ? "CPU" : "GPU") << "): " << mediaUpdateMs + media_Part_Trans << " ms" << std::endl;
-    std::cout << "- Tiempo de generacion flowfield en GPU + actualizacion particulas" << ((media_FF_Trans || media_Part_Trans) > 0 ? " (incluyendo transferencias): " : ": ") << tiempoTotalSimulacion << " ms" << std::endl;
+    std::cout << "- Tiempo de generacion flowfield + actualizacion particulas" << ((media_FF_Trans || media_Part_Trans) > 0 ? " (incluyendo transferencias): " : ": ") << tiempoTotalSimulacion << " ms" << std::endl;
     
     std::cout << "--------------------------------------" << std::endl;
 
