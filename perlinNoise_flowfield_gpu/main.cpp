@@ -434,12 +434,13 @@ int main() {
     // 
 
     //SE EJECUTA SIEMPRE:
+    /*
     float2_simple* d_flowfield = nullptr;
     const size_t FLOW_BYTES = flowCount * sizeof(float2_simple);
     cudaMalloc(&d_flowfield, FLOW_BYTES);
 
     //COMENTAR SI NO SE HACE EN GPU!!:
-    /*
+    
     // 1. Reservar memoria persistente en la GPU
     ParticleGPU* d_particles = nullptr;
     const size_t PARTICLE_BYTES = N * sizeof(ParticleGPU);
@@ -505,7 +506,7 @@ int main() {
         // ============================================================================
         //______________Generación en CPU______________
 
-        /*
+        
         auto cpu_start = std::chrono::high_resolution_clock::now(); //Inicio
 
         //1. Llamamos a la función que prepara y lanza el kernel
@@ -519,7 +520,7 @@ int main() {
             std::chrono::duration<double, std::milli> frameMS = cpu_end - cpu_start;
             acumulado_FF += frameMS.count();
         }
-        */
+        
         // ============================================================================
 
 
@@ -527,7 +528,7 @@ int main() {
         // ============================================================================
         //______________Generación en GPU______________
 
-
+        /*
         //1. Llamamos a la función que prepara y lanza el kernel
         GpuMetrics metrics_flowfieldGPU = launch_cuda_flowfield(perlin.p.data(), xoff_matrix.data(), yoff_matrix.data(), zoff, d_flowfield, cols, rows); //h_p, h_xoff, h_yoff, zoff, h_out, cols, rows
 
@@ -540,7 +541,7 @@ int main() {
             acumuladoTrans_FF += metrics_flowfieldGPU.transferTime;
 
         }
-
+        */
         // ============================================================================
 
 
@@ -563,26 +564,41 @@ int main() {
         // ______________1. Actualización de partículas______________
 
         // ============================================================================
-        /*
+        
         // ______________Actualización en GPU______________
+        /*
+        // SI EL FLOWFIELD SE GENERA EN CPU:
+        // 1. Iniciamos la medida de transferencia antes de la copia del flowfield
+        auto trans_step1_start = std::chrono::high_resolution_clock::now();
+
+        // Copiamos el resultado de la CPU a la memoria de la GPU para que el Kernel lo pueda usar
+        cudaMemcpy(d_flowfield, flowfield.data(), FLOW_BYTES, cudaMemcpyHostToDevice);
+
+        auto trans_step1_end = std::chrono::high_resolution_clock::now();
+
+
+        // ------------------
+
         GpuMetrics metrics_particlesUpdateGPU = launch_cuda_update_particles(d_particles, d_flowfield, N, cols, rows, scl, WIDTH, HEIGHT);
         cudaDeviceSynchronize();
 
         //Inicio del reloj para medir el tiempo de transferencia de datos entre gpu y cpu
-        auto transfer_start_loop = std::chrono::high_resolution_clock::now();
+        auto trans_step2_start = std::chrono::high_resolution_clock::now();
 
         //Transferencia de datos GPU -> CPU
         cudaMemcpy(particles.data(), d_particles, PARTICLE_BYTES, cudaMemcpyDeviceToHost);
 
         //Fin del reloj
-        auto transfer_end_loop = std::chrono::high_resolution_clock::now();
+        auto trans_step2_end = std::chrono::high_resolution_clock::now();
 
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
             acumulado_UpdateParticulas += metrics_particlesUpdateGPU.kernelTime; //solo cómputo
 
             // 2. Tiempo de transferencia de este frame
-            std::chrono::duration<double, std::milli> durationTrans = transfer_end_loop - transfer_start_loop;
-            acumuladoTrans_Part += durationTrans.count(); //SIN TIEMPO DE TRANSFERENCIA INICIAL! CPU->GPU -> durationTrans_Inicial,
+            std::chrono::duration<double, std::milli> durationTrans_Ida = trans_step1_end - trans_step1_start;
+            std::chrono::duration<double, std::milli> durationTrans_Vuelta = trans_step2_end - trans_step2_start;
+
+            acumuladoTrans_Part += (durationTrans_Ida.count() + durationTrans_Vuelta.count());
         }
 
         // 2. SINCRONIZACIÓN PARA DIBUJAR (CPU)
@@ -620,10 +636,14 @@ int main() {
         // ______________Actualización en CPU______________
         
         boolParticlesUpdate_cpu = true;
-        // 1. Medir transferencia por separado -> SE PASAN LOS DATOS DEL FLOWFIELD PROCESADOS POR LA GPU A LA VARIABLE FLOWFIELD
+
+        /*
+        // 1. Medir transferencia por separado
+        // SE PASAN LOS DATOS DEL FLOWFIELD PROCESADOS POR LA GPU A LA VARIABLE FLOWFIELD SI EL FLOWFIELD HA SIDO GENERADO EN GPU
         auto trans_start = std::chrono::high_resolution_clock::now();
         cudaMemcpy(flowfield.data(), d_flowfield, FLOW_BYTES, cudaMemcpyDeviceToHost);
         auto trans_end = std::chrono::high_resolution_clock::now();
+        */
 
         // 2. Medir cómputo puro
         auto update_start = std::chrono::high_resolution_clock::now();
@@ -633,15 +653,17 @@ int main() {
         // Acumular tiempos
         if (warmedUp && frameCount < (WARMUP_FRAMES + TOTAL_TEST_FRAMES)) {
             // Sumamos la transferencia al acumulador de transferencias de partículas
+            /*
             std::chrono::duration<double, std::milli> transMS = trans_end - trans_start;
             acumuladoTrans_Part += transMS.count();
+            */
 
             // Sumamos el cómputo al acumulador de cómputo
             std::chrono::duration<double, std::milli> frameMS = update_end - update_start;
             acumulado_UpdateParticulas += frameMS.count();
         }
         
-
+        
         // ============================================================================
 
 
@@ -667,9 +689,10 @@ int main() {
     // ============================================================================
 
     // ------------------------ RESERVA DE MEMORIA UNA ÚNICA VEZ PARA ACT. PARTÍCULAS EN GPU ------------------------
+    /*
     cudaFree(d_flowfield);
     //COMENTAR SI NO SE HACE EN GPU!!
-    /*
+    
     cudaFree(d_particles);
     */
     // ============================================================================
@@ -718,7 +741,7 @@ int main() {
     }
     std::cout << std::endl;
 
-    std::cout << "TIEMPOS FINALES (CON TRANSFERENCIAS):" << std::endl;
+    std::cout << "TIEMPOS FINALES" << ((media_FF_Trans || media_Part_Trans) > 0 ? " (CON TRANSFERENCIAS): " : ": ") << std::endl;
     std::cout << "- Generacion Flowfield (" << (boolFlowfield_cpu ? "CPU" : "GPU") << "): " << media_FFms + media_FF_Trans << " ms" << std::endl;
     std::cout << "- Actualizacion Particulas (" << (boolParticlesUpdate_cpu ? "CPU" : "GPU") << "): " << mediaUpdateMs + media_Part_Trans << " ms" << std::endl;
     std::cout << "- Tiempo de generacion flowfield en GPU + actualizacion particulas" << ((media_FF_Trans || media_Part_Trans) > 0 ? " (incluyendo transferencias): " : ": ") << tiempoTotalSimulacion << " ms" << std::endl;
